@@ -814,6 +814,7 @@ module.exports = function (RED) {
             node_error(node.name + " Cannot write value (" + msg.payload + ") to msg.topic:" + msg.topic + " error:" + err);
             reset_opcua_client(connect_opcua_client);
           } else {
+            node.send(msg);
             set_node_status_to("value written");
             verbose_log("Value written!");
           }
@@ -880,7 +881,8 @@ module.exports = function (RED) {
           } else {
             set_node_status_to("active writing");
             verbose_log("Values written!");
-            node.send({ payload: statusCode });
+            msg.statusCode = statusCode;
+            node.send(msg);
           }
         });
       } else {
