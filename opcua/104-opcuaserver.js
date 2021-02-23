@@ -64,6 +64,7 @@ module.exports = function (RED) {
         this.maxNodesPerHistoryUpdateEvents = n.maxNodesPerHistoryUpdateEvents;
         this.maxNodesPerTranslateBrowsePathsToNodeIds = n.maxNodesPerTranslateBrowsePathsToNodeIds;
         this.registerToDiscovery = n.registerToDiscovery;
+        this.constructDefaultAddressSpace = n.constructDefaultAddressSpace;
         var node = this;
         var variables = { Counter: 0 };
         var equipmentCounter = 0;
@@ -139,6 +140,7 @@ module.exports = function (RED) {
                 userCertificateManager,
  
                 port: parseInt(n.port),
+                resourcePath: "/" + node.endpoint, // Option was missing / can be 
                 maxAllowedSessionNumber: 1000,
                 maxConnectionsPerEndpoint: 20,
                 nodeset_filename: xmlFiles,
@@ -151,8 +153,8 @@ module.exports = function (RED) {
                   discoveryUrls: []
                 },
                 buildInfo: {
-                    buildNumber: "0.2.96",
-                    buildDate: "2021-01-20T08:58:00"
+                    buildNumber: "",
+                    buildDate: ""
                 },
                 serverCapabilities: {
                   maxBrowseContinuationPoints: 10,
@@ -182,8 +184,8 @@ module.exports = function (RED) {
             };
             
             node.server_options.buildInfo = {
-                buildNumber: "0.2.99",
-                buildDate: "2021-01-27T16:24:00"
+                buildNumber: "0.2.108",
+                buildDate: "2021-02-18T20:56:00"
             };
             
             var hostname = os.hostname();
@@ -335,9 +337,9 @@ module.exports = function (RED) {
                 node.server = new opcua.OPCUAServer(node.server_options);
 
                 await node.server.initialize();
-
+                if (node.constructDefaultAddressSpace === true) {
                     construct_my_address_space(node.server.engine.addressSpace);
-                                
+                }
                 await node.server.start();
 
                 verbose_log("Using server certificate  " + node.server.certificateFile);
@@ -404,20 +406,21 @@ module.exports = function (RED) {
                     return false;
                 }
 
-                var rootFolder = addressSpace.findNode("ns=1;s=VendorName");
-                if (!rootFolder) {
-                    node_error("VerdorName not found!");
-                    return false;
-                }
-                var references = rootFolder.findReferences("Organizes", true);
+                if (node.constructDefaultAddressSpace === true) {
+                    var rootFolder = addressSpace.findNode("ns=1;s=VendorName");
+                    if (!rootFolder) {
+                        node_error("VerdorName not found!");
+                        return false;
+                    }
+                    var references = rootFolder.findReferences("Organizes", true);
 
-                if (findReference(references, equipment.nodeId)) {
-                    verbose_warn("Equipment Reference found in VendorName");
-                    equipmentNotFound = false;
-                } else {
-                    verbose_warn("Equipment Reference not found in VendorName");
+                    if (findReference(references, equipment.nodeId)) {
+                        verbose_warn("Equipment Reference found in VendorName");
+                        equipmentNotFound = false;
+                    } else {
+                        verbose_warn("Equipment Reference not found in VendorName");
+                    }
                 }
-
             }
 
             node.send(msg);
@@ -516,6 +519,17 @@ module.exports = function (RED) {
                     if (e > 0) {
                         name = msg.topic.substring(0, e - 1);
                         datatype = msg.topic.substring(e + 9);
+                        var arrayType = opcua.VariantArrayType.Scalar;
+                        var arr = datatype.indexOf("Array");
+                        var dim1 = undefined;
+                        var valueRank = undefined;
+                        if (arr > 0) {
+                            arrayType = opcua.VariantArrayType.Array;
+                            dim1 = datatype.substring(arr+6);
+                            dim1 = parseInt(dim1.substring(0, dim1.length-1));
+                            valueRank = 1; // 1-dim Array
+                            datatype = datatype.substring(0, arr);
+                        }
                         var browseName = name.substring(7);
                         variables[browseName] = 0;
 
@@ -540,6 +554,9 @@ module.exports = function (RED) {
                         if (datatype == "Byte") {
                             opcuaDataType = opcua.DataType.Byte;
                         }
+                        if (datatype == "SByte") {
+                            opcuaDataType = opcua.DataType.SByte;
+                        }
                         if (datatype == "ByteString") {
                             opcuaDataType = opcua.DataType.ByteString;
                             variables[browseName] = Buffer.from("");
@@ -552,15 +569,20 @@ module.exports = function (RED) {
                             opcuaDataType = opcua.DataType.Boolean;
                             variables[browseName] = true;
                         }
-                        verbose_log(opcuaDataType.toString());
-                        addressSpace.getOwnNamespace().addVariable({
+                        verbose_log("Datatype: " + datatype);
+                        verbose_log("OPC UA type id: "+ opcuaDataType.toString());
+                        
+                        var newVAR = addressSpace.getOwnNamespace().addVariable({
                             organizedBy: addressSpace.findNode(parentFolder.nodeId),
                             nodeId: name,
                             browseName: browseName, // or displayName
                             dataType: datatype, // opcuaDataType,
+                            valueRank,
+                            arrayDimensions: [dim1],
                             value: {
                                 get: function () {
                                     return new opcua.Variant({
+                                        arrayType,
                                         dataType: opcuaDataType,
                                         value: variables[browseName]
                                     })
@@ -632,7 +654,9 @@ module.exports = function (RED) {
                 await initNewServer();
                 node.server = new opcua.OPCUAServer(node.server_options);
                 node.server.on("post_initialize", () => {
-                    construct_my_address_space(node.server.engine.addressSpace);
+                    if (node.constructDefaultAddressSpace === true) {
+                        construct_my_address_space(node.server.engine.addressSpace);
+                    }
                 });                                   
                 await node.server.start();
                 // Client connects with userName

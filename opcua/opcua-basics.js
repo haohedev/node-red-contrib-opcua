@@ -16,6 +16,7 @@
 
 "use strict";
 const { stringify } = require('flatted');
+const { ModelChangeStructureDataType } = require('node-opcua');
 var opcua = require('node-opcua');
 
 const typedArrays = {
@@ -30,6 +31,49 @@ const typedArrays = {
     Float: Float32Array,
     Double: Float64Array
 };
+
+function cloneObject(obj) {
+    let cpy;
+
+    // Handle the 3 simple types, and null or undefined
+    if (null === obj || "object" != typeof obj) return obj;
+
+    // Handle Buffer
+    if (Buffer.isBuffer(obj)) return new Buffer.from(obj);
+
+    // Handle Date
+    if (obj instanceof Date) {
+        cpy = new Date();
+        cpy.setTime(obj.getTime());
+        return cpy;
+    }
+
+    // Handle Array
+    if (Array.isArray(obj)) {
+        cpy = [];
+        for (let i = 0, len = obj.length; i < len; i++) {
+            cpy[i] = cloneObject(obj[i]);
+        }
+        return cpy;
+    }
+
+    // Handle NodeId
+    if (obj instanceof opcua.NodeId) {
+        cpy = obj.toString();
+        return cpy;
+    }
+
+    // Handle Object
+    if (obj instanceof Object) {
+        cpy = {};
+        for (let attr in obj) {
+            if (obj.hasOwnProperty(attr)) cpy[attr] = cloneObject(obj[attr]);
+        }
+        return cpy;
+    }
+
+    throw new Error("Unable to copy obj! Its type isn't supported.");
+}
 
 module.exports.get_timeUnit_name = function (unit) {
 
@@ -77,108 +121,106 @@ module.exports.calc_milliseconds_by_time_and_unit = function (time, unit) {
     return time;
 };
 
-module.exports.collectAlarmFields = function (field, key, value, msg) {
+module.exports.collectAlarmFields = function (field, key, value, payload) {
 
     switch (field) {
         // Common fields
         case "EventId":
-            msg.EventId = value;
+            payload.EventId = value;
             break;
         case "EventType":
-            msg.EventType = value;
+            payload.EventType = value;
             break;
         case "SourceNode":
-            msg.SourceNode = value;
+            payload.SourceNode = value;
             break;
         case "SourceName":
-            msg.SourceName = value;
+            payload.SourceName = value;
             break;
         case "Time":
-            msg.Time = value;
+            payload.Time = value;
             break;
         case "ReceiveTime":
-            msg.ReceiveTime = value;
+            payload.ReceiveTime = value;
             break;
         case "Message":
-            msg.Message = value.text;
+            payload.Message = value.text;
             break;
         case "Severity":
-            msg.Severity = value;
+            payload.Severity = value;
             break;
 
             // ConditionType
         case "ConditionClassId":
-            msg.ConditionClassId = value;
+            payload.ConditionClassId = value;
             break;
         case "ConditionClassName":
-            msg.ConditionClassNameName = value;
+            payload.ConditionClassNameName = value;
             break;
         case "ConditionName":
-            msg.ConditionName = value;
+            payload.ConditionName = value;
             break;
         case "BranchId":
-            msg.BranchId = value;
+            payload.BranchId = value;
             break;
         case "Retain":
-            msg.Retain = value;
+            payload.Retain = value;
             break;
         case "EnabledState":
-            msg.EnabledState = value.text;
+            payload.EnabledState = value.text;
             break;
         case "Quality":
-            msg.Quality = value;
+            payload.Quality = value;
             break;
         case "LastSeverity":
-            msg.LastSeverity = value;
+            payload.LastSeverity = value;
             break;
         case "Comment":
-            msg.Comment = value.text;
+            payload.Comment = value.text;
             break;
         case "ClientUserId":
-            msg.ClientUserId = value;
+            payload.ClientUserId = value;
             break;
 
             // AcknowledgeConditionType
         case "AckedState":
-            msg.AckedState = value.text;
+            payload.AckedState = value.text;
             break;
         case "ConfirmedState":
-            msg.ConfirmedState = value.text;
+            payload.ConfirmedState = value.text;
             break;
 
             // AlarmConditionType
         case "ActiveState":
-            msg.ActiveState = value.text;
+            payload.ActiveState = value.text;
             break;
         case "InputNode":
-            msg.InputNode = value;
+            payload.InputNode = value;
             break;
         case "SupressedState":
-            msg.SupressedState = value.text;
+            payload.SupressedState = value.text;
             break;
 
             // Limits
         case "HighHighLimit":
-            msg.HighHighLimit = value;
+            payload.HighHighLimit = value;
             break;
         case "HighLimit":
-            msg.HighLimit = value;
+            payload.HighLimit = value;
             break;
         case "LowLimit":
-            msg.LowLimit = value;
+            payload.LowLimit = value;
             break;
         case "LowLowLimit":
-            msg.LowLowLimit = value;
+            payload.LowLowLimit = value;
             break;
         case "Value":
-            msg.Value = value;
+            payload.Value = value;
             break;
         default:
-            msg.error = "unknown collected Alarm field " + field;
+            payload[field] = cloneObject(value);
             break;
     }
-
-    return msg;
 };
 
 
@@ -216,10 +258,28 @@ module.exports.getBasicEventFields = function () {
         "InputNode",
         "SuppressedState",
 
+        // Limits
         "HighLimit",
         "LowLimit",
         "HighHighLimit",
         "LowLowLimit",
+
+        // AutoIdScanEventType & AutoIdDiagnosisEventType
+        "3:DeviceName",
+
+        // AutoIdScanEventType
+        "3:ScanResult",
+
+        // AutoIdDiagnosisEventType
+        "4:DeviceName",
+
+        // AutoIdLastAccessEventType
+        "4:Client",
+        "4:Command",
+        "4:LastAccessResult",
+
+        // AutoIdPresenceEventType
+        "4:Presence",
 
         "Value"
     ];
@@ -258,13 +318,101 @@ module.exports.getSubscriptionParameters = function (timeMilliseconds) {
     }
 };
 
+/*
+ALIASES for Basic types:
+<Alias Alias="Boolean">i=1</Alias>
+<Alias Alias="SByte">i=2</Alias>
+<Alias Alias="Byte">i=3</Alias>
+<Alias Alias="Int16">i=4</Alias>
+<Alias Alias="UInt16">i=5</Alias>
+<Alias Alias="Int32">i=6</Alias>
+<Alias Alias="UInt32">i=7</Alias>
+<Alias Alias="Int64">i=8</Alias>
+<Alias Alias="UInt64">i=9</Alias>
+<Alias Alias="Float">i=10</Alias>
+<Alias Alias="Double">i=11</Alias>
+<Alias Alias="DateTime">i=13</Alias>
+<Alias Alias="String">i=12</Alias>
+<Alias Alias="ByteString">i=15</Alias>
+<Alias Alias="Guid">i=14</Alias>
+<Alias Alias="XmlElement">i=16</Alias>
+<Alias Alias="NodeId">i=17</Alias>
+<Alias Alias="ExpandedNodeId">i=18</Alias>
+<Alias Alias="QualifiedName">i=20</Alias>
+<Alias Alias="LocalizedText">i=21</Alias>
+<Alias Alias="StatusCode">i=19</Alias>
+<Alias Alias="Structure">i=22</Alias>
+<Alias Alias="Number">i=26</Alias>
+<Alias Alias="Integer">i=27</Alias>
+<Alias Alias="UInteger">i=28</Alias>
+<Alias Alias="HasComponent">i=47</Alias>
+<Alias Alias="HasProperty">i=46</Alias>
+<Alias Alias="Organizes">i=35</Alias>
+<Alias Alias="HasEventSource">i=36</Alias>
+<Alias Alias="HasNotifier">i=48</Alias>
+<Alias Alias="HasSubtype">i=45</Alias>
+<Alias Alias="HasTypeDefinition">i=40</Alias>
+<Alias Alias="HasModellingRule">i=37</Alias>
+<Alias Alias="HasEncoding">i=38</Alias>
+<Alias Alias="HasDescription">i=39</Alias>
+*/
+module.exports.convertToString = function(dataTypeInNodeFormat) {
+    var datatype = "";
+
+    switch (dataTypeInNodeFormat) {
+        case "ns=0;i=1":
+            datatype = "Boolean";
+            break;
+        case "ns=0;i=2":
+            datatype = "SByte";
+            break;
+        case "ns=0;i=3":
+            datatype = "Byte";
+            break;
+        case "ns=0;i=4":
+            datatype = "Int16";
+            break;
+        case "ns=0;i=5":
+            datatype = "UInt16";
+            break;
+        case "ns=0;i=6":
+            datatype = "Int32";
+            break;
+        case "ns=0;i=7":
+            datatype = "UInt32";
+            break;
+        case "ns=0;i=10":
+            datatype = "Float";
+            break;
+        case "ns=0;i=11":
+            datatype = "Double";
+            break;
+        case "ns=0;i=12":
+            datatype = "String";
+            break;
+        case "ns=0;i=13":
+            datatype = "DateTime";
+            break;
+        case "ns=0;i=21":
+            datatype = "LocalizedText";
+            break;
+        default:
+            datatype = "";
+            break;
+    }
+
+    return datatype;
+}
+
 module.exports.buildBrowseMessage = function (topic) {
     return {
         "topic": topic,
         "nodeId": "",
         "browseName": "",
-        "nodeClassType": "",
+        "description": "",
+        // "nodeClassType": "",
         "typeDefinition": "",
+        "dataType": "",
         "payload": ""
     };
 };

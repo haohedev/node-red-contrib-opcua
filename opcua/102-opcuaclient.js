@@ -148,30 +148,31 @@ module.exports = function (RED) {
     // Fields selected alarm fields
     // EventFields same order returned from server array of variants (filled or empty)
     function __dumpEvent(node, session, fields, eventFields, _callback) {
+      var cnt = eventFields.length;
       var msg = {};
-      msg.payload = [];
+      msg.payload = {};
 
       verbose_log("EventFields=" + eventFields);
 
       async.forEachOf(eventFields, function (variant, index, callback) {
 
         if (variant.dataType === DataType.Null) {
-          return callback("variants dataType is Null");
-        }
-
-        if (variant.dataType === DataType.NodeId) {
+          if (--cnt === 0) node.send(msg);
+          callback("variants dataType is Null");
+        } else if (variant.dataType === DataType.NodeId) {
           getBrowseName(session, variant.value, function (err, name) {
             if (!err) {
-              opcuaBasics.collectAlarmFields(fields[index], variant.dataType.toString(), variant.value, msg);
+              opcuaBasics.collectAlarmFields(fields[index], variant.dataType.toString(), variant.value, msg.payload);
               set_node_status_to("active event");
-              node.send(msg);
             }
+            if (--cnt === 0) node.send(msg);
             callback(err);
           });
         } else {
           setImmediate(function () {
-            opcuaBasics.collectAlarmFields(fields[index], variant.dataType.toString(), variant.value, msg);
+            opcuaBasics.collectAlarmFields(fields[index], variant.dataType.toString(), variant.value, msg.payload);
             set_node_status_to("active event");
+            if (--cnt === 0) node.send(msg);
             callback();
           })
         }
@@ -743,53 +744,19 @@ module.exports = function (RED) {
       }
 
       if (node.session) {
-        var nodeId = coerceNodeId(items[0]);
-        var typeStr = "";
-        node.session.readVariableValue(nodeId, function (err, dataValue) {
+        // TODO this could loop through all items
+        node.session.readAllAttributes(coerceNodeId(items[0]), function(err, result) {
           if (!err) {
-            typeStr = dataValue.value.dataType.toString();
+              // console.log("INFO: " + JSON.stringify(result));
+              var newMsg = Object.assign(msg, result);
+              node.send(newMsg);
+          }
+          else {
+            set_node_status_to("error");
+            node_error("Cannot read attributes from nodeId: " + items[0])    
           }
         });
-        // Create new ClientSession
-        node.client.keepSessionAlive = true;
-        // var session = new ClientSession(node.client); // OLD CODE NOT USED
-        var proxyManager = new UAProxyManager(node.session);
-        // console.log(nodeId.toString());
-        proxyManager.getObject(nodeId.toString(), function (err, data) {
-          if (!err) {
-            if (data.typeDefinition != "FolderType") {
-              var object = {};
-              try {
-                object = JSON.parse(stringify(data));
-              } catch (err) {
-                node_error(err);
-                node.warn(data);
-                return;
-              }
-              msg.payload = {};
-
-              if (object.description != null) {
-                msg.payload.description = object.description;
-              } else {
-                msg.payload.description = "";
-              }
-              if (object.browseName && object.browseName.name) {
-                msg.payload.browseName = object.browseName.name;
-              }
-              else {
-                msg.payload.browseName = object.browseName;
-              }
-              msg.payload.userAccessLevel = object.userAccessLevel;
-              msg.payload.accessLevel = object.accessLevel;
-              msg.payload.type = typeStr;
-              node.send(msg);
-            }
-          } else {
-            node_error(err);
-            set_node_errorstatus_to("error", err);
-            reset_opcua_client(connect_opcua_client);
-          }
-        });
+      
       } else {
         set_node_status_to("Session invalid");
         node_error("Session is not active!")
@@ -1293,7 +1260,7 @@ module.exports = function (RED) {
     }
 
     function delete_subscription_action_input(msg) {
-      verbose_log("delete subscription= " + subscription.toString() + " msg= " + stringify(msg));
+      verbose_log("delete subscription msg= " + stringify(msg));
       if (!subscription) {
         verbose_warn("Cannot delete, no subscription existing!");
       } else {
@@ -1314,45 +1281,97 @@ module.exports = function (RED) {
       }
     }
 
-    function browse_action_input(msg) {
+    async function browse_action_input(msg) {
       verbose_log("browsing");
+      var allInOne = []; // if msg.collect and msg.collect === true then collect all items to one msg
       var NodeCrawler = opcua.NodeCrawler;
+
       if (node.session) {
-        var crawler = new NodeCrawler(node.session);
+        const crawler = new NodeCrawler(node.session);
+        set_node_status_to("active browsing");
 
-        crawler.read(msg.topic, function (err, obj) {
-          var newMessage = opcuaBasics.buildBrowseMessage(msg.topic);
-          if (!err) {
-            set_node_status_to("active browsing");
-
-            treeify.asLines(obj, true, true, function (line) {
-
-              verbose_log(line);
-              if (line.indexOf("browseName") > 0) {
-                newMessage.browseName = line.substring(line.indexOf("browseName") + 12);
-              }
-              if (line.indexOf("nodeId") > 0) {
-                newMessage.nodeId = line.substring(line.indexOf("nodeId") + 8);
-                newMessage.nodeId = newMessage.nodeId.replace("&#x2F;", "\/");
-              }
-              if (line.indexOf("nodeClass") > 0) {
-                newMessage.nodeClassType = line.substring(line.indexOf("nodeClass") + 11);
-              }
-              if (line.indexOf("typeDefinition") > 0) {
-                newMessage.typeDefinition = line.substring(line.indexOf("typeDefinition") + 16);
-                newMessage.payload = Date.now();
-                node.send(newMessage);
-              }
-
-              set_node_status_to("browse done");
-
-            });
-          } else {
-            node_error(err.message);
-            set_node_errorstatus_to("error browsing", err);
-            reset_opcua_client(connect_opcua_client);
+        crawler.on("browsed", function(element) {
+          if (msg.collect===undefined || (msg.collect && msg.collect === false)) {
+            var item = {};
+            item.payload = Object.assign({}, element); // Clone element
+            var dataType = "";
+            item.topic = element.nodeId.toString();
+            if (element && element.dataType) {
+              dataType = opcuaBasics.convertToString(element.dataType.toString());
+            }
+            if (dataType && dataType.length > 0) {
+              item.datatype = dataType;
+            }
+            node.send(item); // Send immediately as browsed
+          }
+          else {
+            var item = Object.assign({}, element); // Clone element
+            allInOne.push(item);
           }
         });
+
+        // Browse from given topic
+        const nodeId = msg.topic; // "ObjectsFolder";
+        crawler.read(nodeId, function(err, obj) {
+            if (!err) {
+              // Crawling done
+              if (msg.collect && msg.collect === true) {
+                verbose_log("Send all in one, items: " + allInOne.length);
+                var all = {};
+                all.topic = "AllInOne";
+                all.payload = allInOne;
+                set_node_status_to("browse done");
+                node.send(all);
+                return;
+              }
+              /*
+              let newMessage = opcuaBasics.buildBrowseMessage("");
+              let browseName = "";
+              // This is visual, but takes too long time
+              treeify.asLines(obj, true, true, function(line) {
+                if (line.indexOf("nodeId") > 0) {
+                  count2++;
+                  var nodeId = line.substring(line.indexOf("nodeId") + 8);
+                  // Use nodeId as topic
+                  newMessage = opcuaBasics.buildBrowseMessage(nodeId.toString());
+                  newMessage.nodeId = nodeId;
+                  newMessage.browseName = browseName;
+                }
+                if (line.indexOf("browseName:") > 0) {
+                  browseName = line.substring(line.indexOf("browseName:") + 12);
+                }
+                if (line.indexOf("dataType") > 0) {
+                  newMessage.dataType = line.substring(line.indexOf("dataType") + 10);
+                }
+                // Last item on treeify object structure is typeDefinition
+                if (line.indexOf("typeDefinition") > 0) {
+                  newMessage.typeDefinition = line.substring(line.indexOf("typeDefinition") + 16);
+                  var msg2 = newMessage;
+                  const nodesToRead = [{ nodeId: newMessage.nodeId, attributeId: opcua.AttributeIds.Description }];
+                  node.session.read(nodesToRead, function(err, dataValues) {
+                    if (!err && dataValues.length === 1) {
+                      // Should return only one, localeText
+                      if (dataValues[0] && dataValues[0].value && dataValues[0].value.value && dataValues[0].value.value.text) {
+                        // console.log("NODEID: " + newMessage.nodeId + " DESCRIPTION: " + dataValues[0].value.value.text);
+                        msg2.description = dataValues[0].value.value.text.toString();
+                      }
+                    }
+                    msg2.payload = Date.now(); // TODO check if real DataValue could be used
+                
+                    }
+                    else {
+                      node.send(msg2);
+                    }
+                  });
+                }
+                // console.log(line); // No console output
+              });
+              */
+              set_node_status_to("browse done");
+            }
+            crawler.dispose();
+        });
+
       } else {
         node_error("Session is not active!");
         set_node_status_to("Session invalid");
@@ -1381,7 +1400,7 @@ module.exports = function (RED) {
             filter: msg.eventFilter,
             discardOldest: true
           },
-            3
+            TimestampsToReturn.Neither
           );
         } catch (err) {
           node_error('subscription.monitorEvent:' + err);
