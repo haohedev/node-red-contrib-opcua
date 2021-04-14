@@ -78,6 +78,8 @@ readmultiple to readmultiple items
 writemultiple to write multiple items
 clearitems to empty multiple items (readmultiple / writemultiple)
 
+NOTE: With datatype=xxxArray msg.payload.range = "2:4" can used as indexRange to read/write partial array
+
 Output message
 ----
 
@@ -88,7 +90,55 @@ Output message
 |  sourceTimestamp	 | Source timestamp          |                           |
 |  serverTimestamp   | Server´s timestamp        |                           |
 
+Release history (only couple of older releases):
 
+**v0.2.113**
+<p>
+Enhancement: server commands: registerNamespace and getNamespaceIndex, user can addVariables with registered namespaces like ns=5.<br/>
+Enhancement: msg.topic = readmultiple AND msg.payload = ALL then msg.payload = values<br/>
+</p>
+
+**v0.2.112**
+<p>
+Added DateTime to server.<br/>
+</p>
+
+**v0.2.111**
+<p>
+Fixed DateTime conversion (write).<br/>
+</p>
+
+**v0.2.110**
+<p>
+Added 2D and 3D array support. Examples:<br/>
+ns=1;s=Float2D;datatype=FloatArray[5,5]<br/>
+ns=1;s=Float3D;datatype=FloatArray[5,5,5]<br/>
+NOTE: Write range uses msg.range<br/>
+New feature msg.payload.range can be used to read part of Array<br/>
+New feature msg.range can be used to write part of Array<br/>
+Updated example OPCUA-TEST-NODES.json<br/>
+
+</p>
+
+**v0.2.109**
+<p>
+Added array range examples (examples/OPCUA-TEST-NODES.json).<br/>
+Send only if payload contains something.<br/>
+Added msg.payload.range usage<br/>
+New feature msg.payload.range can be used to read/write part of Array<br/>
+Fix: FQDN -> hostname in makeAplicationUri<br/>
+EventId and statustext as clear string<br/>
+EventId as hex string<br/>
+</p>
+
+**v0.2.108 and older**
+<p>
+Fixed support for server Array variables<br/>
+Browse will create topic and datatype thus output can be connected. Next node can progress output msg.<br/>
+Refactored browse action fast and simple<br/>
+Merged event payload fix. Merge pull request #265 from list3f/master<br/>
+Put OPC UA event data in msg.payload<br/>
+</p>
 # Advanced examples
 - needed from users (add links to examples folder)
 

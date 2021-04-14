@@ -27,6 +27,7 @@ module.exports = function (RED) {
     var opcuaBasics = require('./opcua-basics');
     var envPaths = require("env-paths");
     var config = envPaths("node-red-opcua").config;
+    const {parse, stringify} = require('flatted');
 
     function createCertificateManager() {
         return new opcua.OPCUACertificateManager({
@@ -117,16 +118,17 @@ module.exports = function (RED) {
             text: "Not running"
         });
 
-        var xmlFiles = [  path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.Ua.NodeSet2.xml'),
-            // path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.ISA95.NodeSet2.xml')
+        var xmlFiles = [path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.Ua.NodeSet2.xml'),     // Standard & basic types
+                        path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.Ua.AutoID.NodeSet2.xml'), // Support for RFID Readers
+                        path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.ISA95.NodeSet2.xml')   // ISA95
         ];
         verbose_warn("node set:" + xmlFiles.toString());
 
         async function initNewServer() {
             initialized = false;
             verbose_warn("create Server from XML ...");
-          
-            const applicationUri =  opcua.makeApplicationUrn("%FQDN%", "node-red-contrib-opcua-server");
+            // DO NOT USE "%FQDN%" anymore, hostname is OK
+            const applicationUri =  opcua.makeApplicationUrn(os.hostname(), "node-red-contrib-opcua-server");
             const serverCertificateManager = createCertificateManager();
             const userCertificateManager = createUserCertificateManager();
 
@@ -184,8 +186,8 @@ module.exports = function (RED) {
             };
             
             node.server_options.buildInfo = {
-                buildNumber: "0.2.108",
-                buildDate: "2021-02-18T20:56:00"
+                buildNumber: "0.2.113",
+                buildDate: "2021-03-05T14:55:00"
             };
             
             var hostname = os.hostname();
@@ -396,7 +398,7 @@ module.exports = function (RED) {
                 read_message(payload);
             }
             if (contains_opcua_command(payload)) {
-                execute_opcua_command(msg);
+                msg.payload = execute_opcua_command(msg);
             }
 
             if (equipmentNotFound) {
@@ -454,6 +456,7 @@ module.exports = function (RED) {
             var payload = msg.payload;
             var addressSpace = node.server.engine.addressSpace;
             var name;
+            var returnValue = "";
 
             switch (payload.opcuaCommand) {
 
@@ -521,17 +524,65 @@ module.exports = function (RED) {
                         datatype = msg.topic.substring(e + 9);
                         var arrayType = opcua.VariantArrayType.Scalar;
                         var arr = datatype.indexOf("Array");
-                        var dim1 = undefined;
-                        var valueRank = undefined;
+                        var dim1 = 0;        // Fix for the scalars
+                        var dim2 = 0;        // Matrix
+                        var dim3 = 0;        // Cube
+                        var indexStr = "";
+                        var valueRank = -1;     // Fix for the scalars
                         if (arr > 0) {
                             arrayType = opcua.VariantArrayType.Array;
                             dim1 = datatype.substring(arr+6);
+                            indexStr = dim1.substring(0, dim1.length-1);
                             dim1 = parseInt(dim1.substring(0, dim1.length-1));
                             valueRank = 1; // 1-dim Array
                             datatype = datatype.substring(0, arr);
+                            // valueRank = 2; // 2-dim Matrix FloatArray[5,5]
+                            // valueRank = 3; // 3-dim Matrix FloatArray[5,5,5]
+                            var indexes = indexStr.split(",");
+                            console.log("INDEXES[" + indexes.length + "] = " + JSON.stringify(indexes) + " from " + indexStr);
+                            if (indexes.length === 1) {
+                                dim1 = parseInt(indexes[0]);
+                                valueRank = 1;
+                            }
+                            if (indexes.length === 2) {
+                                dim1 = parseInt(indexes[0]);
+                                dim2 = parseInt(indexes[1]);
+                                valueRank = 2;
+                            }
+                            if (indexes.length === 3) {
+                                dim1 = parseInt(indexes[0]);
+                                dim2 = parseInt(indexes[1]);
+                                dim3 = parseInt(indexes[2]);
+                                valueRank = 3;
+                            }
                         }
+                        var dimensions = valueRank <= 0 ? null : [dim1]; // Fix for conformance check TODO dim2, dim3
                         var browseName = name.substring(7);
                         variables[browseName] = 0;
+                        if (valueRank == 1) {
+                            arrayType = opcua.VariantArrayType.Array;
+                            dimensions = [dim1];
+                            variables[browseName] = new Float32Array(dim1); // [];
+                            for (var i=0; i<dim1; i++) {
+                                variables[browseName][i] = 0;
+                            }
+                        }
+                        if (valueRank == 2) {
+                            arrayType = opcua.VariantArrayType.Matrix;
+                            dimensions = [dim1, dim2];
+                            variables[browseName] = new Float32Array(dim1*dim2); // [];
+                            for (var i=0; i<dim1*dim2; i++) {
+                                variables[browseName][i] = 0;
+                            }
+                        }
+                        if (valueRank == 3) {
+                            arrayType = opcua.VariantArrayType.Matrix; // Actually no Cube => Matrix with 3 dims
+                            dimensions = [dim1, dim2, dim3];
+                            variables[browseName] = new Float32Array(dim1*dim2*dim3); // [];
+                            for (var i=0; i<dim1*dim2*dim3; i++) {
+                                variables[browseName][i] = 0;
+                            }
+                        }
 
                         if (datatype == "Int32") {
                             opcuaDataType = opcua.DataType.Int32;
@@ -557,6 +608,10 @@ module.exports = function (RED) {
                         if (datatype == "SByte") {
                             opcuaDataType = opcua.DataType.SByte;
                         }
+                        if (datatype == "DateTime") {
+                            opcuaDataType = opcua.DataType.DateTime;
+                            variables[browseName] = new Date();
+                        }
                         if (datatype == "ByteString") {
                             opcuaDataType = opcua.DataType.ByteString;
                             variables[browseName] = Buffer.from("");
@@ -570,25 +625,62 @@ module.exports = function (RED) {
                             variables[browseName] = true;
                         }
                         verbose_log("Datatype: " + datatype);
-                        verbose_log("OPC UA type id: "+ opcuaDataType.toString());
+                        verbose_log("OPC UA type id: "+ opcuaDataType.toString() + " dims[" + dim1 + "," + dim2 +"," + dim3 +"] == " + dimensions);
                         
-                        var newVAR = addressSpace.getOwnNamespace().addVariable({
+                        var namespace = addressSpace.getOwnNamespace(); // Default
+                        if (msg.topic.indexOf("ns=1;") !== 0) {
+                            var allNamespaces = addressSpace.getNamespaceArray();
+                            // console.log("ALL ns: " + stringify(allNamespaces));
+                            // Select namespace by index, works up to index = 9
+                            var index = parseInt(msg.topic.substring(3,4));
+                            namespace = allNamespaces[index];
+                        }
+                        var newVAR = namespace.addVariable({
                             organizedBy: addressSpace.findNode(parentFolder.nodeId),
                             nodeId: name,
                             browseName: browseName, // or displayName
                             dataType: datatype, // opcuaDataType,
                             valueRank,
-                            arrayDimensions: [dim1],
+                            arrayDimensions: dimensions,
                             value: {
                                 get: function () {
-                                    return new opcua.Variant({
-                                        arrayType,
-                                        dataType: opcuaDataType,
-                                        value: variables[browseName]
-                                    })
+                                    if (valueRank>=2) {
+                                        return new opcua.Variant({
+                                            arrayType,
+                                            dimensions,
+                                            dataType: opcuaDataType,
+                                            value: variables[browseName]
+                                        });
+                                    }
+                                    else {
+                                        return new opcua.Variant({
+                                            arrayType,
+                                            dataType: opcuaDataType,
+                                            value: variables[browseName]
+                                        });
+                                    } 
                                 },
                                 set: function (variant) {
-                                    variables[browseName] = opcuaBasics.build_new_value_by_datatype(variant.dataType.toString(), variant.value);
+                                    verbose_log("Server set new variable value : " + variables[browseName] + " browseName: " + browseName + " new:" + stringify(variant));
+                                    /*
+                                    // TODO Array partial write need some more studies
+                                    if (msg.payload.range) {
+                                        verbose_log(chalk.red("SERVER WRITE RANGE: " + range));
+                                        var startIndex = 2; // parseInt(range);
+                                        var endIndex = 4; // parseInt(range.substring(1))
+                                        var newIndex = 0;
+                                        var oldValues = variables[browseName].split(",");
+                                        for (var i=startIndex; i<endIndex; i++) {
+                                            oldValues[i] = variant.value[newIndex.toString()];
+                                            newIndex++;
+                                        }
+                                        verbose_log(chalk.red("NEW ARRAY with range values: " + oldValues));
+                                    }
+                                    else {
+                                        */
+                                        variables[browseName] = opcuaBasics.build_new_value_by_datatype(variant.dataType.toString(), variant.value);
+                                    // }
+                                    // variables[browseName] = Object.assign(variables[browseName], opcuaBasics.build_new_value_by_datatype(variant.dataType.toString(), variant.value));
                                     verbose_log("Server variable: " + variables[browseName] + " browseName: " + browseName);
                                     var SetMsg = { "payload" : { "messageType" : "Variable", "variableName": browseName, "variableValue": variables[browseName] }};
                                     verbose_log("msg Payload:" + JSON.stringify(SetMsg));
@@ -632,10 +724,21 @@ module.exports = function (RED) {
                     }
                     break;
 
-                default:
+                case "registerNamespace":
+                    var ns = addressSpace.registerNamespace(msg.topic);
+                    // verbose_log("namespace: " + stringify(ns));
+                    var index = addressSpace.getNamespaceIndex(msg.topic);
+                    returnValue = "ns=" + index.toString();
+                    break;
+                
+                case "getNamespaceIndex":
+                    returnValue = "ns=" + addressSpace.getNamespaceIndex(msg.topic);
+                    break;
+                  default:
                     node_error("unknown OPC UA Command");
             }
 
+            return returnValue;
         }
 
         async function restart_server() {

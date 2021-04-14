@@ -122,11 +122,11 @@ module.exports.calc_milliseconds_by_time_and_unit = function (time, unit) {
 };
 
 module.exports.collectAlarmFields = function (field, key, value, payload) {
-
+    console.log("Collect field: " + field + " key: " + key + " value:" + value + " payload:" + payload);
     switch (field) {
         // Common fields
         case "EventId":
-            payload.EventId = value;
+            payload.EventId = "0x" + value.toString("hex"); // As in UaExpert
             break;
         case "EventType":
             payload.EventType = value;
@@ -171,6 +171,7 @@ module.exports.collectAlarmFields = function (field, key, value, payload) {
             break;
         case "Quality":
             payload.Quality = value;
+            payload.StatusText = value.toString(); // Clear text
             break;
         case "LastSeverity":
             payload.LastSeverity = value;
@@ -570,10 +571,10 @@ module.exports.build_new_variant = function (opcua, datatype, value) {
             });
             break;
         case "DateTime":
-            nValue = {
+            nValue = new opcua.Variant({
                 dataType: opcua.DataType.DateTime,
                 value: new Date(value)
-            };
+            });
             break;
         case "Byte":
             nValue = new opcua.Variant({
@@ -795,7 +796,7 @@ module.exports.build_new_value_by_datatype = function (datatype, value) {
             break;
         case "DateTime":
             uaType = opcua.DataType.DateTime;
-            nValue = value.toString();
+            nValue = new Date(value);  // value.toString();
             break;
         default:
             // uaType = null;
@@ -914,8 +915,8 @@ module.exports.build_new_dataValue = function (datatype, value) {
             break;
         case "DateTime":
             nValue = {
-                dataType: opcua.DataType.UtcTime,
-                value: Date.parse(value)
+                dataType: opcua.DataType.DateTime, // was UtcTime
+                value: value // Date.parse(value)
             };
             break;
         case "Byte":
