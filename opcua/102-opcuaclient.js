@@ -61,6 +61,7 @@ module.exports = function (RED) {
     var cmdQueue = []; // queue msgs which can currently not be handled because session is not established, yet and currentStatus is 'connecting'
     var currentStatus = ''; // the status value set set by node.status(). Didn't find a way to read it back.
     var multipleItems = []; // Store & read multiple nodeIds
+    var multipleExtras = []; // Store & read multiple extras
     var serverCertificate;
 
     connectionOption.securityPolicy = opcua.SecurityPolicy[opcuaEndpoint.securityPolicy] || opcua.SecurityPolicy.None;
@@ -661,12 +662,14 @@ module.exports = function (RED) {
           multipleItems.push(item);
         } else {
           multipleItems.push(msg.topic); // support for multiple item reading
+          multipleExtras.push(msg.extra);
         }
       }
 
       if (msg.topic === "clearitems") {
         verbose_log("clear items...");
         multipleItems = [];
+        multipleExtras = [];
         set_node_status_to("clear items");
         return;
       }
@@ -696,7 +699,7 @@ module.exports = function (RED) {
             set_node_status_to("active multiple reading");
             
             if (msg.payload === "ALL") {
-              node.send({"topic": "ALL", "payload": dataValues, "items": multipleItems});
+              node.send({"topic": "ALL", "payload": dataValues, "items": multipleItems, "extras": multipleExtras});
               return;
             }
             for (var i = 0; i < dataValues.length; i++) {
