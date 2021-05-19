@@ -16,33 +16,19 @@
 
  **/
 
-const { coerceSByte } = require('node-opcua');
+// const { coerceSByte } = require('node-opcua');
 
 module.exports = function (RED) {
     "use strict";
     var opcua = require('node-opcua');
     var path = require('path');
     var os = require("os");
+    var fs = require("fs");
     var chalk = require("chalk");
     var opcuaBasics = require('./opcua-basics');
-    var envPaths = require("env-paths");
-    var config = envPaths("node-red-opcua").config;
     const {parse, stringify} = require('flatted');
+    const { createCertificateManager, createUserCertificateManager } = require("./utils");
 
-    function createCertificateManager() {
-        return new opcua.OPCUACertificateManager({
-            name: "PKI",
-            rootFolder: path.join(config, "PKI"),
-            automaticallyAcceptUnknownCertificate: true
-        });
-    }
-    function createUserCertificateManager() {
-        return new opcua.OPCUACertificateManager({
-            name: "UserPKI",
-            rootFolder: path.join(config, "UserPKI"),
-            automaticallyAcceptUnknownCertificate: true
-        });
-    }
     function OpcUaServerNode(n) {
 
         RED.nodes.createNode(this, n);
@@ -51,6 +37,13 @@ module.exports = function (RED) {
         this.port = n.port;
         this.endpoint = n.endpoint;
         this.autoAcceptUnknownCertificate = n.autoAcceptUnknownCertificate;
+        this.allowAnonymous = n.allowAnonymous;
+        this.endpointNone = n.endpointNone;
+        this.endpointSign = n.endpointSign;
+        this.endpointSignEncrypt = n.endpointSignEncrypt;
+        this.endpointBasic128Rsa15 = n.endpointBasic128Rsa15;
+        this.endpointBasic256 = n.endpointBasic256;
+        this.endpointBasic256Sha256 = n.endpointBasic256Sha256;
         // Operating limits:
         this.maxNodesPerBrowse = n.maxNodesPerBrowse;
         this.maxNodesPerHistoryReadData = n.maxNodesPerHistoryReadData;
@@ -76,23 +69,82 @@ module.exports = function (RED) {
         var equipmentNotFound = true;
         var initialized = false;
         var folder = null;
+        let userManager; // users with username, password and role
+        let users = [{ username: "", password: "", role: "" }]; // Empty as default
 
-        function createCertificateManager() {
-            return new opcua.OPCUACertificateManager({
-                name: "PKI",
-                rootFolder: path.join(config, "PKI"),
-                automaticallyAcceptUnknownCertificate: true
-            });
+        verbose_log("Loading default users from file: users.json");
+        // From the node-red-contrib-opcua folder or input as opcuaCommand
+        if (fs.existsSync("users.json")) {
+            users = JSON.parse(fs.readFileSync("users.json"));
+            verbose_log("Users: " + JSON.stringify(users));
+            setUsers(users);
         }
 
-        function createUserCertificateManager() {
-            return new opcua.OPCUACertificateManager({
-                name: "UserPKI",
-                rootFolder: path.join(config, "UserPKI"),
-                automaticallyAcceptUnknownCertificate: true
-            });
+        // Server endpoints active configuration
+        var policies = [];
+        var modes = [];
+        
+        // Security modes None | Sign | SignAndEncrypt
+        if (this.endpointNone === true) {
+            policies.push(opcua.SecurityPolicy.None);
+            modes.push(opcua.MessageSecurityMode.None);
+        }
+        if (this.endpointSign === true) {
+            modes.push(opcua.MessageSecurityMode.Sign);
+        }
+        if (this.endpointSignEncrypt === true) {
+            modes.push(opcua.MessageSecurityMode.SignAndEncrypt);
+        }
+        // Security policies
+        if (this.endpointBasic128Rsa15 === true) {
+            policies.push(opcua.SecurityPolicy.Basic128Rsa15);
+        }
+        if (this.endpointBasic256 === true) {
+            policies.push(opcua.SecurityPolicy.Basic256);
+        }
+        if (this.endpointBasic256Sha256 === true) {
+            policies.push(opcua.SecurityPolicy.Basic256Sha256);
         }
 
+        // This should be possible to inject for server
+        function setUsers() {   
+            // User manager
+            userManager = {
+                isValidUser: (username, password) => {
+                    const uIndex = users.findIndex(function(u) { return u.username === username; });                    
+                    if (uIndex < 0) {
+                        return false;
+                    }
+                    if (users[uIndex].password !== password) {
+                        return false;
+                    }
+                    return true;
+                },
+                getUserRole: username => {
+                    if (username === "Anonymous" || username === "anonymous") {
+                        return WellKnownRoles.Anonymous;
+                    }
+                    const uIndex = users.findIndex(function(x) { return x.username === username; });
+                    if (uIndex < 0) {  
+                        return WellKnownRoles.Guest; // by default were guest! ( i.e anonymous), read-only access 
+                    }
+                    const userRole = users[uIndex].role;
+
+                    // Default available roles, note each variable / methods should have permissions for real use case
+                    if (userRole === "Anonymous") return WellKnownRoles.Anonymous;
+                    if (userRole === "Guest") return WellKnownRoles.AuthenticatedUser;
+                    if (userRole === "Engineer") return WellKnownRoles.Engineer;
+                    if (userRole === "Observer") return WellKnownRoles.Observer;
+                    if (userRole === "Operator") return WellKnownRoles.Operator;
+                    if (userRole === "ConfigureAmin") return WellKnownRoles.ConfigureAdmin;
+                    if (userRole === "SecurityAmin") return WellKnownRoles.SecurityAdmin;
+
+                    // Return configurated role
+                    return userRole;
+                }
+            };
+        }
+          
         function node_error(err) {
             console.error(chalk.red("[Error] Server node error on: " + node.name + " error: " + JSON.stringify(err)));
             node.error("Server node error on: " + node.name + " error: " + JSON.stringify(err));
@@ -123,7 +175,7 @@ module.exports = function (RED) {
                         path.join(__dirname, 'public/vendor/opc-foundation/xml/Opc.ISA95.NodeSet2.xml')   // ISA95
         ];
         verbose_warn("node set:" + xmlFiles.toString());
-
+        
         async function initNewServer() {
             initialized = false;
             verbose_warn("create Server from XML ...");
@@ -140,7 +192,9 @@ module.exports = function (RED) {
             node.server_options = {
                 serverCertificateManager,
                 userCertificateManager,
- 
+                securityPolicies: policies,
+                securityModes: modes,
+                allowAnonymous: n.allowAnonymous,
                 port: parseInt(n.port),
                 resourcePath: "/" + node.endpoint, // Option was missing / can be 
                 maxAllowedSessionNumber: 1000,
@@ -178,6 +232,7 @@ module.exports = function (RED) {
                     maxNodesPerTranslateBrowsePathsToNodeIds: node.maxNodesPerTranslateBrowsePathsToNodeIds
                   }
                 },
+                userManager, // users with username, password & role, see file users.json
                 isAuditing: false,
                 registerServerMethod: registerMethod
             };
@@ -186,8 +241,8 @@ module.exports = function (RED) {
             };
             
             node.server_options.buildInfo = {
-                buildNumber: "0.2.113",
-                buildDate: "2021-03-05T14:55:00"
+                buildNumber: "0.2.220",
+                buildDate: "2021-05-17T22:55:00"
             };
             
             var hostname = os.hostname();
@@ -344,10 +399,11 @@ module.exports = function (RED) {
                 }
                 await node.server.start();
 
-                verbose_log("Using server certificate  " + node.server.certificateFile);
-                verbose_log("Using PKI  folder         " + node.server.serverCertificateManager.rootDir);
-                verbose_log("Using UserPKI  folder     " + node.server.userCertificateManager.rootDir);
-
+                verbose_log("Using server certificate    " + node.server.certificateFile);
+                verbose_log("Using PKI folder            " + node.server.serverCertificateManager.rootDir);
+                verbose_log("Using UserPKI folder        " + node.server.userCertificateManager.rootDir);
+                verbose_log("Trusted certificate folder  " + node.server.serverCertificateManager.trustedFolder);
+                verbose_log("Rejected certificate folder " + node.server.serverCertificateManager.rejectedFolder);
 
                 // Client connects with userName
                 node.server.on("session_activated", (session) => {
@@ -734,7 +790,19 @@ module.exports = function (RED) {
                 case "getNamespaceIndex":
                     returnValue = "ns=" + addressSpace.getNamespaceIndex(msg.topic);
                     break;
-                  default:
+
+                case "setUsers":
+                    if (msg.payload.hasOwnProperty("users")) {
+                        users = msg.payload.users;
+                        verbose_log("NEW USERS: " + JSON.stringify(users));
+                        setUsers();
+                    }
+                    else {
+                        verbose_warn("No users defined in the input msg)");
+                    }
+                    break;
+    
+                default:
                     node_error("unknown OPC UA Command");
             }
 

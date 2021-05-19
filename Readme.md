@@ -92,6 +92,27 @@ Output message
 
 Release history (only couple of older releases):
 
+**v0.2.117**
+<p>
+Enhancement: Added users to server. Users.json contains username, password and role for each user.<br/>
+</p>
+
+**v0.2.116**
+<p>
+Enhancement: server allow anonymous, added verbose to show trusted/rejected folders.<br/>
+</p>
+
+
+**v0.2.115**
+<p>
+Enhancement: server node security settings; mode and policy<br/>
+</p>
+
+**v0.2.114**
+<p>
+Fix: added to client certificate manager<br/>
+</p>
+
 **v0.2.113**
 <p>
 Enhancement: server commands: registerNamespace and getNamespaceIndex, user can addVariables with registered namespaces like ns=5.<br/>

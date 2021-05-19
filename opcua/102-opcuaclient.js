@@ -38,6 +38,10 @@ module.exports = function (RED) {
   var read_service = require("node-opcua-service-read");
   var TimestampsToReturn = read_service.TimestampsToReturn;
   var subscription_service = require("node-opcua-service-subscription");
+
+  const { createCertificateManager } = require("./utils");
+  const { dumpCertificates } = require("./dump_certificates");
+
   const {parse, stringify} = require('flatted');
 
   function OpcUaClientNode(n) {
@@ -62,10 +66,13 @@ module.exports = function (RED) {
     var currentStatus = ''; // the status value set set by node.status(). Didn't find a way to read it back.
     var multipleItems = []; // Store & read multiple nodeIds
     var multipleExtras = []; // Store & read multiple extras
-    var serverCertificate;
 
     connectionOption.securityPolicy = opcua.SecurityPolicy[opcuaEndpoint.securityPolicy] || opcua.SecurityPolicy.None;
     connectionOption.securityMode = opcua.MessageSecurityMode[opcuaEndpoint.securityMode] || opcua.MessageSecurityMode.None;
+
+
+    connectionOption.clientCertificateManager = createCertificateManager();
+
 
     if (node.certificate === "l" && node.localfile) {
       verbose_log("Using 'own' local certificate file " + node.localfile);
@@ -203,7 +210,7 @@ module.exports = function (RED) {
       verbose_warn(" !!!!!!!!!!!!!!!!!!!!!!!!  CONNECTION RE-ESTABLISHED !!!!!!!!!!!!!!!!!!! Node: " + node.name);
     };
     const backoff = function (attempt, delay) {
-      verbose_warn("backoff  attempt #" + attempt + " retrying in " + delay / 1000.0 + " seconds. Node:  " + node.name);
+      verbose_warn("backoff  attempt #" + attempt + " retrying in " + delay / 1000.0 + " seconds. Node:  " + node.name + " " + opcuaEndpoint.endpoint);
     };
     const reconnection = function () {
       verbose_warn(" !!!!!!!!!!!!!!!!!!!!!!!!  Starting Reconnection !!!!!!!!!!!!!!!!!!! Node: " + node.name);
@@ -312,8 +319,13 @@ module.exports = function (RED) {
           return;
         }
         verbose_log("Exact endpointUrl: " + opcuaEndpoint.endpoint + " hostname: " + os.hostname());
+
+        await node.client.clientCertificateManager.initialize();
         await node.client.connect(opcuaEndpoint.endpoint);
       } catch (err) {
+
+        console.log(err);
+
         verbose_warn("Case A: Endpoint does not contain, 1==None 2==Sign 3==Sign&Encrypt securityMode:" + stringify(connectionOption.securityMode) + " securityPolicy:" + stringify(connectionOption.securityPolicy));
         verbose_warn("Case B: UserName & password does not match to server (needed by Sign): " + userIdentity.userName + " " + userIdentity.password);
         set_node_errorstatus_to("invalid endpoint " + opcuaEndpoint.endpoint, err);
@@ -324,56 +336,12 @@ module.exports = function (RED) {
       // This will succeed first time only if security policy and mode are None
       // Later user can use path and local file to access server certificate file
 
-      try {
         if (!node.client) {
           node_error("Client not yet created & connected, cannot getEndpoints!");
           return;
         }
-        const endpoints = await node.client.getEndpoints();
-        var i = 0;
-        endpoints.forEach(function (endpoint, i) {
-          /*
-          verbose_log("endpoint " + endpoint.endpointUrl + "");
-          verbose_log("Application URI " + endpoint.server.applicationUri);
-          verbose_log("Product URI " + endpoint.server.productUri);
-          verbose_log("Application Name " + endpoint.server.applicationName.text);
-          */
-          var applicationName = endpoint.server.applicationName.text;
-          if (!applicationName) {
-            applicationName = "OPCUA_Server";
-          }
-          /*
-          verbose_log("Security Mode " + endpoint.securityMode.toString());
-          verbose_log("securityPolicyUri " + endpoint.securityPolicyUri);
-          verbose_log("Type " + endpoint.server.applicationType);
-          */
-          // verbose_log("certificate " + "..." + " endpoint.serverCertificate");
-          endpoint.server.discoveryUrls = endpoint.server.discoveryUrls || [];
-          // verbose_log("discoveryUrls " + endpoint.server.discoveryUrls.join(" - "));
-          serverCertificate = endpoint.serverCertificate;
-          // Use applicationName instead of fixed server_certificate
-          var certificate_filename = path.join(__dirname, "../../PKI/" + applicationName + i + ".pem");
-          if (serverCertificate) {
-            fs.writeFile(certificate_filename, crypto_utils.toPem(serverCertificate, "CERTIFICATE"), function () {});
-          }
-        });
 
-        endpoints.forEach(function (endpoint) {
-          // verbose_log("Identify Token for : Security Mode= " + endpoint.securityMode.toString(), " Policy=", endpoint.securityPolicyUri);
-          endpoint.userIdentityTokens.forEach(function (token) {
-            /*
-            verbose_log("policyId " + token.policyId);
-            verbose_log("tokenType " + token.tokenType.toString());
-            verbose_log("issuedTokenType " + token.issuedTokenType);
-            verbose_log("issuerEndpointUrl " + token.issuerEndpointUrl);
-            verbose_log("securityPolicyUri " + token.securityPolicyUri);
-            */
-          });
-        });
-      }
-      catch (err) {
-        node_error("Cannot read endpoints: " + err.toString());
-      }
+      // dumpCertificates(node.client); // TODO Wrong folder or something to solve
 
       // STEP 3
       verbose_log("Create session ...");
@@ -508,11 +476,20 @@ module.exports = function (RED) {
         " Item from Topic: " + msg.topic + " session Id: " + node.session.sessionId);
 
       switch (node.action) {
+        case "register":
+          register_action_input(msg);
+          break;
+        case "unregister":
+          unregister_action_input(msg);
+          break;  
         case "read":
           read_action_input(msg);
           break;
         case "info":
           info_action_input(msg);
+          break;
+        case "build":
+          build_extension_object_action_input(msg);
           break;
         case "write":
           write_action_input(msg);
@@ -549,6 +526,24 @@ module.exports = function (RED) {
       //node.send(msg); // msg.payload is here actual inject caused wrong values
     }
     node.on("input", processInputMsg);
+
+    async function register_action_input(msg) {
+      verbose_log("register nodes : " + stringify(msg.payload));
+      // First test, let´s see if this needs some refactoring. Same way perhaps as with readMultiple
+      // msg.topic not used, but cannot be empty
+      // msg.paylod == array of nodeIds to register
+      const registeredNodes = await node.session.registerNodes(msg.payload);
+      verbose_log("RegisteredNodes: " + stringify(registeredNodes));
+    }
+
+    async function unregister_action_input(msg) {
+      verbose_log("unregister nodes : " + stringify(msg.payload));
+      // First test, let´s see if this needs some refactoring. Same way perhaps as with readMultiple
+      // msg.topic not used, but cannot be empty
+      // msg.paylod == array of nodeIds to register
+      const unregisteredNodes = await node.session.registerNodes(msg.payload);
+      verbose_log("UnregisteredNodes: " + stringify(unregisteredNodes));
+    }
 
     function read_action_input(msg) {
 
@@ -792,13 +787,66 @@ module.exports = function (RED) {
       }
     }
 
-    function write_action_input(msg) {
+    async function build_extension_object_action_input(msg) {
+      verbose_log("Construct ExtensionObject from " + JSON.stringify(msg));
+      var item = "";
+      if (msg.topic) {
+        var n = msg.topic.indexOf("datatype=");
+
+        if (n > 0) {
+          msg.datatype = msg.topic.substring(n + 9);
+          item = msg.topic.substring(0, n - 1);
+          msg.topic = item;
+          verbose_log(stringify(msg));
+        }
+      }
+
+      if (item.length > 0) {
+        items[0] = item;
+      } else {
+        items[0] = msg.topic;
+      }
+
+      if (node.session) {
+        try {
+          const ExtensionNodeId = coerceNodeId(items[0]);
+          verbose_log("ExtensionNodeId: " + ExtensionNodeId);
+          const ExtensionTypeDefinition = await node.session.read({ nodeId: ExtensionNodeId, attributeId: opcua.AttributeIds.Value}); // opcua.AttributeIds.DataTypeDefinition});
+          verbose_log("ExtensionType: " + JSON.stringify(ExtensionTypeDefinition));
+          // const ExtensionData = await node.session.constructExtensionObject(ExtensionNodeId, {}); // ExtensionTypeDefinition); // JSON.parse(msg.payload));
+          // const ExtensionType = ExtensionTypeDefinition.value.dataType;
+          const ExtensionType = await node.session.read({ nodeId: ExtensionNodeId, attributeId: opcua.AttributeIds.DataType}); // opcua.AttributeIds.DataTypeDefinition});
+          verbose_log("ExtensionObject DataType nodeId: " + ExtensionType.value.value);
+          const ExtensionData = await node.session.constructExtensionObject(ExtensionType.value.value); // ExtensionNodeId);
+          if (ExtensionData) {
+            verbose_log("ExtensionData: " + ExtensionData.toString());
+            // OK build new message with ExtensionObject
+            var newmsg = {};
+            newmsg.payload = ExtensionData.toString();
+            newmsg.datatype = "ExtensionObject";
+            newmsg.topic = items[0];
+            verbose_log("Extension Object msg: " + stringify(newmsg))
+            node.send(newmsg);
+          }
+        }
+        catch(err) {
+          node_error("Failed to build ExtensionObject, error: " + err);
+        }
+      } else {
+        set_node_status_to("Session invalid");
+        node_error("Session is not active!")
+      }
+    }
+
+
+    async function write_action_input(msg) {
       verbose_log("writing");
       // Topic value: ns=2;s=1:PST-007-Alarm-Level@Training?SETPOINT
       var ns = msg.topic.substring(3, 4); // Parse namespace, ns=2
       var dIndex = msg.topic.indexOf("datatype=");
       var s = "";
       var range = null;
+      var extensionobject = null;
 
       if (msg.datatype == null && dIndex > 0) {
         msg.datatype = msg.topic.substring(dIndex + 9);
@@ -815,8 +863,7 @@ module.exports = function (RED) {
       } else {
         nodeid = new nodeId.NodeId(nodeId.NodeIdType.NUMERIC, parseInt(s), parseInt(ns));
       }
-
-      
+  
       verbose_log("msg=" + stringify(msg));
       verbose_log("namespace=" + ns);
       verbose_log("string=" + s);
@@ -825,6 +872,13 @@ module.exports = function (RED) {
       verbose_log(nodeid.toString());
       var opcuaDataValue = opcuaBasics.build_new_dataValue(msg.datatype, msg.payload);
       verbose_log("DATATYPE: " + stringify(opcuaDataValue));
+      
+      if (msg.datatype && msg.datatype === "ExtensionObject" && node.session) {
+        var obj = JSON.parse(msg.payload);
+        extensionobject = await node.session.constructExtensionObject(nodeid, obj);
+        verbose_log("ExtensionObject=" + stringify(extensionobject));
+      }
+      
       // TODO Fix object array according range
       // Added support for indexRange, payload can be just one number as string "5"  or "2:5"
 

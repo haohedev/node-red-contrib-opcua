@@ -96,9 +96,12 @@ limitations under the License.
             <option value="deletesubscription">DELETE SUBSCRIPTION</option>
             <option value="events">EVENTS</option>
             <option value="info">INFO</option>
+            <option value="build">BUILD</option>
             <option value="monitor">MONITOR</option>
             <option value="readmultiple">READ MULTIPLE</option>
             <option value="writemultiple">WRITE MULTIPLE</option>
+            <option value="register">REGISTER</option>
+            <option value="unregister">UNREGISTER</option>
         </select>
     </div>
     <div class="form-row" id="node-input-timerow">
@@ -153,8 +156,11 @@ limitations under the License.
             <li>Deletesubscription</li>
             <li>Event</li>
             <li>Info</li>
+            <li>Build</li>
             <li>Monitor</li>
             <li>Read Multiple</li>
+            <li>Register</li>
+            <li>Unregister</li>
          </ul>
     </p>
     <p>Server certificate options are:</p>
@@ -171,6 +177,8 @@ limitations under the License.
     <p>User can manually copy server certificate.</p>
     <p>Inject your OPC UA address (NodeId) by the <strong>Topic</strong> of an Inject node or with the OpcUa-Item cotrolled by an Inject node.</p>
     <p>To Read/Write inject the Topic for every operation.</p>
+    <p>Use register to registerNodeIds, if server supports registeredNodes then it will perform better on normal read or readMultiple</p>
+    <p>Use unregister to unregisterNodeIds, if server supports unregisteredNodes then it will release earlier registered nodeIds</p>
     <p>The value to Write should be injected by an OpcUa-Item.</p>
     <p>Inject the Topic only once on Subscribe or Event for subscription and you got the changing value on every Interval.
         Every inject subscribes a new monitored Item.</p>
@@ -180,6 +188,8 @@ limitations under the License.
     <p>Read multiple will first store all input msg nodeId values to array</p>
     <p> when input message is string readmultiple then actual read is done. NOTE: If payload == ALL then all values are in one msg.payload</p>
     <p> when input message is string clearitems then nodeId array is cleared</p>
+    <p>Info read attributes from the given nodeId</p>
+    <p>Build will construct Extension Object message with topic, datatype and payload (value)</p>
     <p>Browse will lookup address space from the injected msg.topic (nodeId)</p>
     <p> if msg.collect === true then result will be collected into one msg. msg.payload will be array of items</p>
     <p> msg.payload.range = "2:4" and FloatArray or any Array datatype then indexes from 2 to 4 will be used to read or write depending on action</p>
