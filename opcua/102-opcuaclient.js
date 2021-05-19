@@ -916,12 +916,13 @@ module.exports = function (RED) {
         }
 
         set_node_status_to("writing");
-        node.session.write(nodeToWrite, function (err) {
+        node.session.write(nodeToWrite, function (err, statusCode) {
           if (err) {
             set_node_errorstatus_to("error", err);
             node_error(node.name + " Cannot write value (" + msg.payload + ") to msg.topic:" + msg.topic + " error:" + err);
             reset_opcua_client(connect_opcua_client);
           } else {
+            msg.statusCode = statusCode;
             node.send(msg);
             set_node_status_to("value written");
             verbose_log("Value written!");
@@ -1276,7 +1277,7 @@ module.exports = function (RED) {
             samplingInterval: interval,
             queueSize: queueSize,
             discardOldest: true,
-            filter: dataChangeFilter
+            // filter: dataChangeFilter //remove filter
           },
             TimestampsToReturn.Both, // Other valid values: Source | Server | Neither | Both
           );
